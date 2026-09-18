@@ -36,13 +36,13 @@ use windows::{
       },
       Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
       WindowsAndMessaging::{
-        GetClientRect, LoadCursorW, SendMessageW, SetCursor, HCURSOR, HTCLIENT, IDC_ARROW,
-        POINTER_INPUT_TYPE, PT_PEN, PT_TOUCH, SIZE_MINIMIZED, WM_DESTROY, WM_ENTERSIZEMOVE,
-        WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN,
-        WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_MOVING,
-        WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
-        WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SIZE, WM_USER, WM_XBUTTONDBLCLK,
-        WM_XBUTTONDOWN, WM_XBUTTONUP,
+        GetClientRect, GetWindowLongPtrW, LoadCursorW, SendMessageW, SetCursor, GWL_EXSTYLE,
+        HCURSOR, HTCLIENT, IDC_ARROW, POINTER_INPUT_TYPE, PT_PEN, PT_TOUCH, SIZE_MINIMIZED,
+        WM_DESTROY, WM_ENTERSIZEMOVE, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+        WM_MOUSEWHEEL, WM_MOVE, WM_MOVING, WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE,
+        WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SIZE,
+        WM_USER, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WS_EX_NOACTIVATE,
       },
     },
   },
@@ -116,7 +116,14 @@ struct CompositionHost {
   /// Whether a `TrackMouseEvent(TME_LEAVE)` request is outstanding, so
   /// `WM_MOUSELEAVE` is delivered exactly once per hover session.
   mouse_tracking: Cell<bool>,
+  /// A `WS_EX_NOACTIVATE` host must never hand focus to WebView2's hidden
+  /// input window; doing so would activate this window's thread anyway.
+  focus_on_interaction: bool,
   cursor_changed_token: i64,
+}
+
+pub(crate) fn host_accepts_focus(hwnd: HWND) -> bool {
+  unsafe { (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE.0) == 0 }
 }
 
 /// Creates a WebView2 composition controller parented (for input/ownership
@@ -231,6 +238,7 @@ pub unsafe fn attach_host_subclass(
     env3,
     cursor: Cell::new(default_cursor),
     mouse_tracking: Cell::new(false),
+    focus_on_interaction: host_accepts_focus(parent),
     cursor_changed_token: 0,
   });
   let host_ptr = Box::into_raw(host);
@@ -337,9 +345,11 @@ unsafe extern "system" fn host_subclass_proc(
     }
 
     WM_SETFOCUS | WM_ENTERSIZEMOVE => {
-      let _ = host
-        .controller
-        .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+      if host.focus_on_interaction {
+        let _ = host
+          .controller
+          .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+      }
     }
 
     msg if msg == WM_MOVE || msg == WM_MOVING => {
@@ -469,9 +479,11 @@ fn forward_mouse_message(
       // The host HWND keeps Win32 focus when its client area is clicked, so
       // hand keyboard/IME focus to the webview's hidden input window here —
       // this is what makes typing and composition reach the page.
-      let _ = host
-        .controller
-        .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+      if host.focus_on_interaction {
+        let _ = host
+          .controller
+          .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+      }
     },
     WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => unsafe {
       let _ = ReleaseCapture();

@@ -654,7 +654,7 @@ impl InnerWebView {
     unsafe {
       controller.SetIsVisible(attributes.visible)?;
 
-      if attributes.focused {
+      if attributes.focused && (!is_composition || composition::host_accepts_focus(parent)) {
         controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC)?;
       }
     }
